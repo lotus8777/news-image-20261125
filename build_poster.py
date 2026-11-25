@@ -1,202 +1,139 @@
 #!/usr/bin/env python3
-"""Draw the news-image-20261125 poster: one 1024x1024 cartoon front page.
+"""Draw the 25 November 2026 cartoon front page and save it as entry.png.
 
-Layout: cherry-red masthead, Nvidia lead story (generated flat-vector hero
-beside a navy lead panel), four rounded cards for the other stories, footer
-with the date and sources. The output is deterministic: fixed fonts, fixed
-geometry, no timestamps, no randomness.
+The page is a 1024x1024 newspaper front: a red masthead, a courtroom hero
+photo on the left with a navy lead story on the right, four short news
+cards in a 2x2 grid, and a footer line with the date and sources.
+
+Everything is drawn from fixed coordinates, so running this script twice
+produces the same bytes. The hero artwork comes from the upscaled render
+in the parent directory (hero-huawei-x4.png); it is shrunk to the hero
+box and centre-cropped vertically.
 """
 
-import hashlib
-from pathlib import Path
-
+import os
 from PIL import Image, ImageDraw, ImageFont
 
-HERE = Path(__file__).resolve().parent
-ROOT = HERE.parent
-HERO = ROOT / "hero-huawei.png"
-OUT = HERE / "entry.png"
+HERE = os.path.dirname(os.path.abspath(__file__))
+HERO_PATH = os.path.join(HERE, "..", "hero-huawei-x4.png")
+OUT_PATH = os.path.join(HERE, "entry.png")
 
-W, H = 1024, 1024
-BG = (255, 246, 236)
-RED = (210, 31, 60)
-NAVY = (20, 38, 76)
-GREEN = (74, 222, 128)
+PAGE = 1024
+CREAM = (255, 246, 236)
+PAPER = (255, 255, 255)
 INK = (26, 32, 44)
 GREY = (90, 96, 110)
-WHITE = (255, 255, 255)
-PALE = (255, 233, 214)
+MASTHEAD_RED = (210, 31, 60)
+PEACH = (255, 233, 214)
+NAVY = (20, 38, 76)
+GREEN = (74, 222, 128)
 
-FONT_DIR = Path("/usr/share/fonts/truetype/dejavu")
-
-
-def font(name, size):
-    path = FONT_DIR / name
-    if not path.exists():
-        raise SystemExit(f"missing font: {path}")
-    return ImageFont.truetype(str(path), size)
+SANS = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+SANS_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
 
-BOLD = "DejaVuSans-Bold.ttf"
-PLAIN = "DejaVuSans.ttf"
+def font(size, bold=False):
+    return ImageFont.truetype(SANS_BOLD if bold else SANS, size)
 
 
-def wrap(draw, text, fnt, max_w):
-    """Split text into lines that fit max_w pixels, word by word."""
-    lines, cur = [], ""
-    for word in text.split():
-        trial = f"{cur} {word}".strip()
-        if draw.textlength(trial, font=fnt) <= max_w:
-            cur = trial
-        else:
-            if cur:
-                lines.append(cur)
-            cur = word
-    if cur:
-        lines.append(cur)
-    return lines
+def place(draw, x, y, text, size, color, bold=False):
+    """Draw one left-aligned line; (x, y) is the top of the ascender box."""
+    draw.text((x, y), text, font=font(size, bold), fill=color)
 
 
-def fit(draw, text, fnt_name, start_size, max_w):
-    """Largest bold size at or below start_size that fits max_w."""
-    size = start_size
-    while size > 10:
-        fnt = font(fnt_name, size)
-        if draw.textlength(text, font=fnt) <= max_w:
-            return fnt
-        size -= 2
-    return font(fnt_name, 10)
+def centred(draw, cx, y, text, size, color, bold=False):
+    """Draw one line centred on cx; y is the top of the ascender box."""
+    f = font(size, bold)
+    x = (PAGE - int(f.getlength(text))) // 2
+    draw.text((x, y), text, font=f, fill=color)
 
 
-def rounded(canvas, box, radius, fill):
-    draw = ImageDraw.Draw(canvas)
-    draw.rounded_rectangle(box, radius=radius, fill=fill)
-    return draw
+def top_strip(draw, x, y, width, color):
+    """A coloured band across the top of a card, rounded at the top only."""
+    height = 11
+    draw.rounded_rectangle((x, y, x + width, y + height - 1), radius=5, fill=color)
+    # Square off the bottom corners of the band.
+    draw.rectangle((x, y + 5, x + width, y + height - 1), fill=color)
 
 
-def paste_hero(canvas, hero_path, box):
-    """Paste the hero image into box, keeping its aspect, corners rounded."""
-    x0, y0, x1, y1 = box
-    bw, bh = x1 - x0, y1 - y0
-    hero = Image.open(hero_path).convert("RGB")
-    scale = max(bw / hero.width, bh / hero.height)
-    nw, nh = round(hero.width * scale), round(hero.height * scale)
-    hero = hero.resize((nw, nh), Image.LANCZOS)
-    left, top = (nw - bw) // 2, (nh - bh) // 2
-    hero = hero.crop((left, top, left + bw, top + bh))
-    mask = Image.new("L", (bw, bh), 0)
-    ImageDraw.Draw(mask).rounded_rectangle([0, 0, bw, bh], radius=18, fill=255)
-    canvas.paste(hero, (x0, y0), mask)
+def hero_picture():
+    """Shrink the upscaled courtroom render and cut its middle band."""
+    art = Image.open(HERO_PATH).convert("RGB")
+    art = art.resize((470, 470), Image.LANCZOS)
+    return art.crop((0, 78, 470, 391))
 
 
-def card(draw, x, y, w, h, accent, kicker, headline, body):
-    draw.rounded_rectangle([x, y, x + w, y + h], radius=16, fill=WHITE)
-    draw.rounded_rectangle([x, y, x + w, y + 10], radius=5, fill=accent)
-    draw.rectangle([x, y + 5, x + w, y + 10], fill=accent)
-    pad = 24
-    inner = w - 2 * pad
-    ky = y + 26
-    draw.text((x + pad, ky), kicker, font=font(BOLD, 16), fill=accent)
-    head_f = font(BOLD, 25)
-    lines = wrap(draw, headline, head_f, inner)
-    if len(lines) > 2:
-        raise SystemExit(f"headline too long for card: {headline!r}")
-    hy = ky + 28
-    for line in lines[:2]:
-        draw.text((x + pad, hy), line, font=head_f, fill=INK)
-        hy += 31
-    body_f = font(PLAIN, 18)
-    blines = wrap(draw, body, body_f, inner)
-    if len(blines) > 3:
-        raise SystemExit(f"body too long for card: {body!r}")
-    by = hy + 8
-    for line in blines[:3]:
-        draw.text((x + pad, by), line, font=body_f, fill=GREY)
-        by += 25
+def build():
+    page = Image.new("RGB", (PAGE, PAGE), CREAM)
+    draw = ImageDraw.Draw(page)
 
+    # --- Masthead -------------------------------------------------------
+    draw.rectangle((0, 0, PAGE, 108), fill=MASTHEAD_RED)
+    centred(draw, 512, 6, "WORLD NEWS", 72, PAPER, bold=True)
+    centred(draw, 512, 78, "WEDNESDAY · 25 NOVEMBER 2026", 23, PEACH, bold=True)
 
-def main():
-    canvas = Image.new("RGB", (W, H), BG)
-    draw = ImageDraw.Draw(canvas)
+    # --- Hero photo (left) and lead story (right) -----------------------
+    photo = hero_picture()
+    mask = Image.new("L", photo.size, 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, 470, 313), radius=18, fill=255)
+    page.paste(photo, (24, 136), mask)
 
-    # Masthead.
-    draw.rectangle([0, 0, W, 108], fill=RED)
-    title_f = font(BOLD, 72)
-    draw.text((W / 2, 6), "WORLD NEWS", font=title_f, fill=WHITE, anchor="ma")
-    date_f = font(BOLD, 23)
-    draw.text(
-        (W / 2, 78),
-        "WEDNESDAY \u00b7 25 NOVEMBER 2026",
-        font=date_f,
-        fill=PALE,
-        anchor="ma",
-    )
-
-    # Lead row: hero left, navy panel right.
-    row_y, row_h = 124, 338
-    hero_w = 470
-    hero_h = round(hero_w * 2 / 3)
-    paste_hero(
-        canvas,
-        HERO,
-        (24, row_y + (row_h - hero_h) // 2, 24 + hero_w,
-         row_y + (row_h - hero_h) // 2 + hero_h),
-    )
-    panel = (510, row_y, 1000, row_y + row_h)
-    draw.rounded_rectangle(panel, radius=18, fill=NAVY)
-    px, pw = panel[0] + 28, panel[2] - panel[0] - 56
-    draw.text((px, row_y + 22), "THE LEAD \u2014 HUAWEI", font=font(BOLD, 18),
-              fill=GREEN)
-    head_f = fit(draw, "GUILTY ON 10", BOLD, 54, pw)
-    draw.text((px, row_y + 52), "GUILTY ON 10", font=head_f, fill=WHITE)
-    draw.line([(px, row_y + 122), (px + 64, row_y + 122)], fill=GREEN, width=5)
-    sub_f = font(PLAIN, 23)
-    sub = ("A U.S. jury convicts Huawei on 10 of 12 counts \u2014 "
-           "bank fraud, wire fraud, sanctions breaches and "
-           "trade-secret theft. Sentencing next September.")
-    sy = row_y + 142
-    for line in wrap(draw, sub, sub_f, pw):
-        draw.text((px, sy), line, font=sub_f, fill=WHITE)
-        sy += 31
-    tag = "10 OF 12 COUNTS \u00b7 2018 CASE"
-    tag_f = fit(draw, tag, BOLD, 16, pw)
-    draw.text((px, row_y + row_h - 40), tag, font=tag_f, fill=GREEN)
-
-    # Four story cards, 2 x 2.
-    cw, ch = 478, 238
-    stories = [
-        ((198, 44, 62), "CHINA \u00b7 POLITICS",
-         "Shanghai chief Chen Jining probed",
-         "Beijing says the Politburo member faces a graft probe, "
-         "the fourth Politburo member investigated since 2025."),
-        ((24, 110, 196), "UNITED STATES \u00b7 CYBER",
-         "CIA and spy chief's office hacked",
-         "Hackers hit unclassified open-source systems, CNN says. "
-         "Officials say no classified data was affected."),
-        ((214, 110, 20), "CHINA \u00b7 AVIATION",
-         "Xiamen Air buys 50 Boeing 737-8s",
-         "List price about $7.4bn, deliveries 2031-2034. First big "
-         "Chinese Boeing order since 2017."),
-        ((13, 140, 130), "SAUDI ARABIA",
-         "Riyadh tower hit again, 11 hurt",
-         "The 385m PIF tower is struck a second time in a week. "
-         "At least two are seriously hurt, civil defence says."),
+    draw.rounded_rectangle((510, 124, 1000, 462), radius=18, fill=NAVY)
+    lead_x = 538
+    place(draw, lead_x, 146, "THE LEAD — HUAWEI", 18, GREEN, bold=True)
+    place(draw, lead_x, 176, "GUILTY ON 10", 54, PAPER, bold=True)
+    draw.rectangle((538, 244, 602, 248), fill=GREEN)
+    lead_lines = [
+        "A U.S. jury convicts Huawei on 10 of",
+        "12 counts — bank fraud, wire fraud,",
+        "sanctions breaches and trade-secret",
+        "theft. Sentencing next September.",
     ]
-    positions = [(24, 478), (522, 478), (24, 732), (522, 732)]
-    for (accent, kicker, headline, body), (cx, cy) in zip(stories, positions):
-        card(draw, cx, cy, cw, ch, accent, kicker, headline, body)
+    for i, line in enumerate(lead_lines):
+        place(draw, lead_x, 266 + 31 * i, line, 23, PAPER)
+    place(draw, lead_x, 422, "10 OF 12 COUNTS · 2018 CASE", 16, GREEN, bold=True)
 
-    # Footer: shrink until it fits the full width.
-    foot_text = ("25 NOVEMBER 2026 \u00b7 SOURCES: REUTERS \u00b7 CNN "
-                 "\u00b7 AIRWAYS MAGAZINE \u00b7 AL JAZEERA")
-    foot_f = fit(draw, foot_text, PLAIN, 16, W - 32)
-    draw.text((W / 2, 988), foot_text, font=foot_f, fill=GREY, anchor="ma")
+    # --- Four news cards -------------------------------------------------
+    cards = [
+        # (x, y, strip, kicker, headline lines, body lines)
+        (24, 478, (198, 44, 62), "CHINA · POLITICS",
+         ["Shanghai chief Chen Jining", "probed"],
+         ["Beijing says the Politburo member faces a graft",
+          "probe, the fourth Politburo member",
+          "investigated since 2025."]),
+        (522, 478, (24, 110, 196), "UNITED STATES · CYBER",
+         ["CIA and spy chief's office", "hacked"],
+         ["Hackers hit unclassified open-source systems,",
+          "CNN says. Officials say no classified data was",
+          "affected."]),
+        (24, 732, (214, 110, 20), "CHINA · AVIATION",
+         ["Xiamen Air buys 50 Boeing", "737-8s"],
+         ["List price about $7.4bn, deliveries 2031-2034.",
+          "First big Chinese Boeing order since 2017."]),
+        (522, 732, (13, 140, 130), "SAUDI ARABIA",
+         ["Riyadh tower hit again, 11", "hurt"],
+         ["The 385m PIF tower is struck a second time in",
+          "a week. At least two are seriously hurt, civil",
+          "defence says."]),
+    ]
+    for x, y, strip, kicker, headlines, body in cards:
+        draw.rounded_rectangle((x, y, x + 478, y + 238), radius=16, fill=PAPER)
+        top_strip(draw, x, y, 478, strip)
+        text_x = x + 24
+        place(draw, text_x, y + 26, kicker, 16, strip, bold=True)
+        for i, line in enumerate(headlines):
+            place(draw, text_x, y + 54 + 31 * i, line, 25, INK, bold=True)
+        for i, line in enumerate(body):
+            place(draw, text_x, y + 124 + 25 * i, line, 18, GREY)
 
-    canvas.save(OUT, optimize=True)
-    data = OUT.read_bytes()
-    print(f"wrote {OUT}  {len(data)} bytes  "
-          f"sha256={hashlib.sha256(data).hexdigest()}")
+    # --- Footer -----------------------------------------------------------
+    centred(draw, 512, 988,
+            "25 NOVEMBER 2026 · SOURCES: REUTERS · CNN · AIRWAYS MAGAZINE · AL JAZEERA",
+            16, GREY)
+
+    page.save(OUT_PATH, optimize=True)
+    print(f"wrote {OUT_PATH} ({os.path.getsize(OUT_PATH)} bytes)")
 
 
 if __name__ == "__main__":
-    main()
+    build()
